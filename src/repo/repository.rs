@@ -1,7 +1,7 @@
 use async_stream::stream;
 use async_walkdir::WalkDir;
 use futures::{Stream, StreamExt};
-use tracing::{debug, error};
+use tracing::error;
 
 use crate::{Package, Repo};
 
@@ -31,16 +31,12 @@ impl Repository {
         let mut dir_entries = WalkDir::new(path);
         stream! {
             'repos: loop {
-                debug!("repos loop");
                 match dir_entries.next().await {
                     Some(Ok(entry)) => {
-                        debug!("next entry {:?}", entry.path());
                         if entry.path().is_dir() && entry.path().ends_with(self.tag.clone()) {
-                            debug!("Found matching tag!");
                             let path: String = entry.path().to_string_lossy().to_string();
                             let mut dir_walker = WalkDir::new(path);
 
-                            // NOTE: Now iterating through THIS repos packages, must use " break 'repo; "
                             loop {
                                 match dir_walker.next().await {
                                     Some(Ok(entry)) => {
@@ -93,19 +89,41 @@ impl Repository {
 pub struct RepositoryList;
 
 impl RepositoryList {
-    pub fn default() -> impl Stream<Item = Repository> {
-        Self::from_path("/etc/yum.repos.d")
+    pub async fn default() -> Result<impl Stream<Item = Repository>, tower::BoxError> {
+        Self::from_path("/etc/yum.repos.d").await
     }
 
-    pub fn from_path(path: &str) -> impl Stream<Item = Repository> {
-        let mut dir_walker = WalkDir::new(path);
+    pub async fn from_path(path: &str) -> Result<impl Stream<Item = Repository>, tower::BoxError> {
+        let p = std::path::Path::new(path).canonicalize()?;
+        let (path, filename) = if p.is_file() {
+            let path = p
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("/etc/yum.repos.d"))
+                .to_str()
+                .unwrap_or("/etc/yum.repos.d");
 
+            let filename = if let Some(name) = p.file_name() {
+                name.to_str().unwrap_or("").to_owned()
+            } else {
+                String::from("")
+            };
+
+            (path, filename)
+        } else {
+            (path, String::from(""))
+        };
+        let mut dir_walker = WalkDir::new(path);
         // ? QUESTION: Investigate stream combinator pattern and use AndThen/and_then ?
-        stream! {
+        Ok(stream! {
             loop {
+                // let filename = filename.clone();
                 match dir_walker.next().await {
                     Some(Ok(entry)) => {
                         let absolute_path = entry.path().to_string_lossy().to_string();
+                        if !filename.is_empty() && !absolute_path.contains(&filename) {
+                            continue;
+                        }
+                        tracing::log::debug!("WE MADE IT THROUGH!");
                         if entry.path().is_file() && absolute_path.contains(".repo") {
                             let mut config = configparser::ini::Ini::new_cs();
                             if let Some(path) = entry.path().to_str() {
@@ -137,6 +155,6 @@ impl RepositoryList {
                     None => break,
                 }
             }
-        }
+        })
     }
 }

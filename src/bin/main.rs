@@ -35,18 +35,19 @@ fn main() {
     let _guard = tokio_runtime.enter();
 
     tokio_runtime.block_on(async move {
-        let repo_list = RepositoryList::default();
-        pin_mut!(repo_list);
-        while let Some(repo) = repo_list.next().await {
-            let package_stream = repo.packages();
-            pin_mut!(package_stream);
-            while let Some(package) = package_stream.next().await {
-                info!(
-                    "{}-{}.{}",
-                    package.name.clone(),
-                    &package.version.to_string(),
-                    &package.arch
-                );
+        if let Ok(repo_list) = RepositoryList::default().await {
+            pin_mut!(repo_list);
+            while let Some(repo) = repo_list.next().await {
+                let package_stream = repo.packages();
+                pin_mut!(package_stream);
+                while let Some(package) = package_stream.next().await {
+                    info!(
+                        "{}-{}.{}",
+                        package.name.clone(),
+                        &package.version.to_string(),
+                        &package.arch
+                    );
+                }
             }
         }
     });
